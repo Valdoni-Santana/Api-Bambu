@@ -118,6 +118,118 @@ def _derive_state(cache: Optional[PrinterStatusCache]) -> Optional[str]:
     return "offline"
 
 
+def _safe_lower(v: Optional[str]) -> str:
+    return (v or "").strip().lower()
+
+
+def _effective_state_from_signals(
+    cache: Optional[PrinterStatusCache], err: dict, raw_hi: Optional[dict]
+) -> dict:
+    if not cache:
+        return {
+            "effective_state": "UNKNOWN",
+            "effective_print_status": "UNKNOWN",
+            "state_conflict_detected": False,
+            "state_decision_reason": "no cache available",
+            "state_signals": {},
+        }
+
+    state_raw = _safe_lower(cache.state)
+    print_raw = _safe_lower(cache.print_status)
+    joined = " ".join([state_raw, print_raw, _safe_lower(err.get("error_message"))]).strip()
+
+    progress = cache.progress_percent
+    eta = cache.eta_minutes
+    cl = cache.current_layer
+    tl = cache.total_layers
+    nozzle = cache.nozzle_temp or 0.0
+    bed = cache.bed_temp or 0.0
+    job = cache.job_name or (raw_hi or {}).get("subtask_name")
+
+    signals = {
+        "state_raw": cache.state,
+        "print_status_raw": cache.print_status,
+        "progress_percent": progress,
+        "eta_minutes": eta,
+        "current_layer": cl,
+        "total_layers": tl,
+        "nozzle_temp": cache.nozzle_temp,
+        "bed_temp": cache.bed_temp,
+        "job_name": job,
+        "error_code": err.get("error_code"),
+    }
+
+    has_pause = any(k in joined for k in ("pause", "paused"))
+    has_attention = any(
+        k in joined
+        for k in ("filament", "material change", "confirm", "attention", "intervention")
+    )
+    has_preparing = any(
+        k in joined
+        for k in ("prepare", "preparing", "heating", "calibrat", "level", "homing", "start")
+    )
+    has_error_word = any(k in joined for k in ("error", "alarm", "fault", "jam", "failed"))
+    has_error_active = bool(err.get("error_code")) and has_error_word
+
+    running_indicators = 0
+    if progress is not None and 0 < float(progress) < 100:
+        running_indicators += 1
+    if eta is not None and int(eta) > 0:
+        running_indicators += 1
+    if cl is not None and tl is not None and int(cl) < int(tl):
+        running_indicators += 1
+    if nozzle >= 150 or bed >= 45:
+        running_indicators += 1
+    if job:
+        running_indicators += 1
+
+    finish_coherent = (
+        progress is not None
+        and float(progress) >= 100
+        and (eta is None or int(eta) == 0)
+        and (cl is None or tl is None or int(cl) >= int(tl))
+        and not (nozzle >= 150 or bed >= 45)
+    )
+
+    if has_error_active:
+        eff = "ERROR"
+        reason = "active error signals present"
+    elif has_pause:
+        eff = "PAUSED"
+        reason = "pause signal detected"
+    elif has_attention:
+        eff = "ATTENTION_REQUIRED"
+        reason = "attention/intervention signal detected"
+    elif has_preparing:
+        eff = "PREPARING"
+        reason = "preparing/heating/calibration signal detected"
+    elif running_indicators >= 3:
+        eff = "RUNNING"
+        reason = "multi-signal active print detected"
+    elif finish_coherent:
+        eff = "FINISH"
+        reason = "finish signals coherent"
+    elif (not job) and (progress in (None, 0)) and nozzle < 80 and bed < 45:
+        eff = "IDLE"
+        reason = "idle thermal/progress profile"
+    else:
+        eff = "UNKNOWN"
+        reason = "insufficient coherent signals"
+
+    raw_finish = ("finish" in state_raw) or ("finish" in print_raw)
+    conflict = bool(raw_finish and eff in ("RUNNING", "PREPARING"))
+    if conflict:
+        reason = f"state={cache.state} but progress/layers/eta/temps indicate {eff.lower()}"
+
+    return {
+        "effective_state": eff,
+        "effective_print_status": eff,
+        "state_conflict_detected": conflict,
+        "state_decision_reason": reason,
+        "state_signals": signals,
+    }
+
+
 def _parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
@@ -227,6 +339,7 @@ def detail_response(
                 "subtask_name": print_d.get("subtask_name"),
                 "task_id": print_d.get("task_id"),
             }
+    eff = _effective_state_from_signals(cache, err, raw_hi)
     return PrinterDetailResponse(
         printer_id=p.id,
         device_id=p.device_id,
@@ -235,8 +348,10 @@ def detail_response(
         model=p.model,
         online=_effective_online(cache),
         state=cache.state if cache else None,
+        effective_state=eff["effective_state"],
         derived_state=_derive_state(cache),
         print_status=cache.print_status if cache else None,
+        effective_print_status=eff["effective_print_status"],
         progress_percent=cache.progress_percent if cache else None,
         job_name=cache.job_name if cache else None,
         eta_minutes=cache.eta_minutes if cache else None,
@@ -250,6 +365,9 @@ def detail_response(
         error_action=err["error_action"],
         error_timestamp=err["error_timestamp"],
         error_raw=err["error_raw"],
+        state_conflict_detected=eff["state_conflict_detected"],
+        state_decision_reason=eff["state_decision_reason"],
+        state_signals=eff["state_signals"],
         network_signal=cache.network_signal if cache else None,
         ams=ar,
         cache_preserved=ar.cache_preserved,
@@ -277,13 +395,16 @@ def panel_response(
     cache: Optional[PrinterStatusCache],
 ) -> PrinterStatusPanel:
     err = _parse_error_struct(cache)
+    eff = _effective_state_from_signals(cache, err, None)
     return PrinterStatusPanel(
         printer_id=p.id,
         name=p.name or p.device_id,
         online=_effective_online(cache),
         state=cache.state if cache else None,
+        effective_state=eff["effective_state"],
         derived_state=_derive_state(cache),
         print_status=cache.print_status if cache else None,
+        effective_print_status=eff["effective_print_status"],
         progress_percent=cache.progress_percent if cache else None,
         job_name=cache.job_name if cache else None,
         eta_minutes=cache.eta_minutes if cache else None,
@@ -297,5 +418,8 @@ def panel_response(
         error_action=err["error_action"],
         error_timestamp=err["error_timestamp"],
         error_raw=err["error_raw"],
+        state_conflict_detected=eff["state_conflict_detected"],
+        state_decision_reason=eff["state_decision_reason"],
+        state_signals=eff["state_signals"],
         last_seen=cache.updated_at if cache else None,
     )

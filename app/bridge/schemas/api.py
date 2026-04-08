@@ -67,8 +67,10 @@ class PrinterStatusPanel(BaseModel):
     name: str
     online: bool
     state: Optional[str] = None
+    effective_state: Optional[str] = None
     derived_state: Optional[str] = None
     print_status: Optional[str] = None
+    effective_print_status: Optional[str] = None
     progress_percent: Optional[float] = None
     job_name: Optional[str] = None
     eta_minutes: Optional[int] = None
@@ -82,6 +84,9 @@ class PrinterStatusPanel(BaseModel):
     error_action: Optional[int] = None
     error_timestamp: Optional[int] = None
     error_raw: Optional[dict] = None
+    state_conflict_detected: bool = False
+    state_decision_reason: Optional[str] = None
+    state_signals: Optional[dict] = None
     last_seen: Optional[datetime] = None
 
 
@@ -93,8 +98,10 @@ class PrinterDetailResponse(BaseModel):
     model: Optional[str] = None
     online: bool
     state: Optional[str] = None
+    effective_state: Optional[str] = None
     derived_state: Optional[str] = None
     print_status: Optional[str] = None
+    effective_print_status: Optional[str] = None
     progress_percent: Optional[float] = None
     job_name: Optional[str] = None
     eta_minutes: Optional[int] = None
@@ -108,6 +115,9 @@ class PrinterDetailResponse(BaseModel):
     error_action: Optional[int] = None
     error_timestamp: Optional[int] = None
     error_raw: Optional[dict] = None
+    state_conflict_detected: bool = False
+    state_decision_reason: Optional[str] = None
+    state_signals: Optional[dict] = None
     network_signal: Optional[str] = None
     ams: Optional[AmsResponse] = None
     cache_preserved: Optional[bool] = None

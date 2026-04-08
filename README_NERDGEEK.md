@@ -117,7 +117,7 @@ Authorization: Bearer <API_TOKEN>
 | GET | `/api/v1/printers/{printer_id}/camera/snapshot` | Último JPEG; `?refresh=true` força nova captura. |
 | GET | `/api/v1/printers/{printer_id}/history` | Histórico recente (`limit`, máx. 500). |
 | GET | `/api/v1/printers/{printer_id}/debug/raw` | **Temporário**: último payload bruto + AMS bruto + highlights + timestamps (mascarado). |
-| GET | `/api/v1/printers/{printer_id}/debug/normalized` | **Temporário**: campos extraídos, inferidos e origem de cada campo. |
+| GET | `/api/v1/printers/{printer_id}/debug/normalized` | **Temporário**: campos extraídos + estado efetivo + sinais e origem de cada campo. |
 | POST | `/api/v1/sync/devices` | Sincroniza lista da conta e reinicia MQTT. |
 | POST | `/api/v1/printers/{printer_id}/refresh` | Atualiza cache pela cloud (+ merge MQTT se existir), grava histórico, tenta `pushall` MQTT. |
 | POST | `/api/v1/printers/{printer_id}/refresh-advanced` | Força refresh avançado read-only e retorna método/tempo/campos obtidos. |
@@ -144,7 +144,9 @@ Authorization: Bearer <API_TOKEN>
   "name": "Bambu A1 - Linha 01",
   "online": true,
   "state": "RUNNING",
+  "effective_state": "RUNNING",
   "print_status": "RUNNING",
+  "effective_print_status": "RUNNING",
   "progress_percent": 42,
   "job_name": "Suporte_Celular_v3.3mf",
   "eta_minutes": 58,
@@ -152,9 +154,37 @@ Authorization: Bearer <API_TOKEN>
   "total_layers": 265,
   "nozzle_temp": 219.4,
   "bed_temp": 64.8,
+  "state_conflict_detected": false,
+  "state_decision_reason": "multi-signal active print detected",
   "last_seen": "2026-04-07T20:00:00Z"
 }
 ```
+
+### Estado bruto vs estado efetivo
+
+O bridge mantém os campos originais de origem (`state`, `print_status`) e adiciona campos de decisão robusta:
+
+- `effective_state`
+- `effective_print_status`
+- `state_conflict_detected`
+- `state_decision_reason`
+- `state_signals` (resumo técnico dos sinais usados)
+
+Motivação: payloads parciais podem vir com `state=FINISH` mesmo durante impressão ativa.  
+Por isso a decisão final usa prioridade e múltiplos sinais, sem sobrescrever o estado bruto.
+
+Prioridade usada:
+1. `ERROR`
+2. `PAUSED`
+3. `ATTENTION_REQUIRED`
+4. `PREPARING`
+5. `RUNNING`
+6. `FINISH`
+7. `IDLE`
+8. `UNKNOWN`
+
+Importante: `progress` sozinho **não** define `RUNNING`.  
+Para `RUNNING`, a decisão exige coerência com múltiplos sinais (ex.: ETA, camadas, temperaturas, job, progresso) e ausência de erro/pausa/atenção.
 
 Campos de erro enriquecidos (quando houver HMS/erro):
 - `error_code`

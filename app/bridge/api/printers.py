@@ -31,6 +31,8 @@ from bridge.services.bambu_runtime import get_runtime
 from bridge.services.camera_service import capture_and_store, get_latest_snapshot_row
 from bridge.services.persistence import apply_status_to_db
 from bridge.services.response_builders import (
+    _effective_state_from_signals,
+    _parse_error_struct,
     ams_response,
     detail_response,
     list_item,
@@ -239,6 +241,11 @@ def printer_debug_normalized(printer_id: int, session: Session = Depends(get_db)
             "context_job_name": r.get("context_job_name"),
             "context_task_id": r.get("context_task_id"),
         }
+    eff = _effective_state_from_signals(
+        cache,
+        _parse_error_struct(cache),
+        normalized.get("raw_highlights") if isinstance(normalized, dict) else None,
+    )
 
     return {
         "printer_id": p.id,
@@ -250,6 +257,11 @@ def printer_debug_normalized(printer_id: int, session: Session = Depends(get_db)
             "has_ams": "ams" in payload,
         },
         "extracted_fields": extracted,
+        "effective_state": eff["effective_state"],
+        "effective_print_status": eff["effective_print_status"],
+        "state_conflict_detected": eff["state_conflict_detected"],
+        "state_decision_reason": eff["state_decision_reason"],
+        "state_signals": eff["state_signals"],
         "ams_slots_raw_found": (
             ((normalized.get("ams") or {}).get("raw_payload_json") or {}).get("slots_raw_found")
             if isinstance((normalized.get("ams") or {}).get("raw_payload_json"), dict)

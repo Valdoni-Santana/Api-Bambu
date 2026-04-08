@@ -9,6 +9,7 @@ dist/
 *.egg-info/
 venv/
 myvenv/
+/storage/
 
 # Tokens and secrets
 proxy_tokens.json

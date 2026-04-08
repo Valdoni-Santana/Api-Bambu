@@ -17,7 +17,7 @@ from bridge.config import Settings, get_settings
 from bridge.models.db import get_session_factory
 from bridge.models.entities import Printer
 from bridge.services.persistence import apply_status_to_db
-from bridge.services.status_normalizer import normalize_mqtt_or_cloud_payload
+from bridge.services.status_normalizer import normalize_mqtt_or_cloud_payload_with_debug
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,10 @@ class BridgeRuntime:
             ).scalar_one_or_none()
             if row is None:
                 return
-            norm = normalize_mqtt_or_cloud_payload(data)
+            norm = normalize_mqtt_or_cloud_payload_with_debug(data)
+            raw = norm.get("raw_payload_json")
+            if isinstance(raw, dict):
+                raw["_meta"] = {"source_label": "mqtt passive"}
             hist = self._should_append_history(row.id)
             apply_status_to_db(session, row.id, norm, append_history=hist)
             session.commit()

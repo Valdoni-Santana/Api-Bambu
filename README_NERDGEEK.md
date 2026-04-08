@@ -110,12 +110,17 @@ Authorization: Bearer <API_TOKEN>
 | GET | `/health` | Saúde do serviço (sem Bearer). |
 | GET | `/api/v1/printers` | Lista impressoras. |
 | GET | `/api/v1/printers/{printer_id}` | Detalhe + AMS embutido. |
+| GET | `/api/v1/printers/{printer_id}?advanced_refresh=true` | Detalhe + AMS embutido com tentativa opcional de refresh avançado read-only. |
 | GET | `/api/v1/printers/{printer_id}/status` | Painel simplificado. |
+| GET | `/api/v1/printers/{printer_id}/status?advanced_refresh=true` | Painel com tentativa opcional de refresh avançado read-only. |
 | GET | `/api/v1/printers/{printer_id}/ams` | AMS normalizado. |
 | GET | `/api/v1/printers/{printer_id}/camera/snapshot` | Último JPEG; `?refresh=true` força nova captura. |
 | GET | `/api/v1/printers/{printer_id}/history` | Histórico recente (`limit`, máx. 500). |
+| GET | `/api/v1/printers/{printer_id}/debug/raw` | **Temporário**: último payload bruto + AMS bruto + highlights + timestamps (mascarado). |
+| GET | `/api/v1/printers/{printer_id}/debug/normalized` | **Temporário**: campos extraídos, inferidos e origem de cada campo. |
 | POST | `/api/v1/sync/devices` | Sincroniza lista da conta e reinicia MQTT. |
 | POST | `/api/v1/printers/{printer_id}/refresh` | Atualiza cache pela cloud (+ merge MQTT se existir), grava histórico, tenta `pushall` MQTT. |
+| POST | `/api/v1/printers/{printer_id}/refresh-advanced` | Força refresh avançado read-only e retorna método/tempo/campos obtidos. |
 
 `printer_id` é o **id interno** (inteiro) da tabela `printers`, não o serial.
 
@@ -150,6 +155,14 @@ Authorization: Bearer <API_TOKEN>
   "last_seen": "2026-04-07T20:00:00Z"
 }
 ```
+
+Campos de erro enriquecidos (quando houver HMS/erro):
+- `error_code`
+- `error_message` (mantido por compatibilidade)
+- `error_attr`
+- `error_action`
+- `error_timestamp`
+- `error_raw` (objeto bruto parseado)
 
 ### Exemplo: `GET /api/v1/printers/{id}/ams`
 
@@ -189,6 +202,112 @@ curl -s -o snap.jpg -H "Authorization: Bearer $API_TOKEN" \
 Script automatizado: `python scripts/smoke_test.py --base http://127.0.0.1:8010 --token <API_TOKEN>`.
 
 Plano de testes: `TEST_PLAN.md`.
+
+### Depuração fina A1 (temporária)
+
+- Ative `DEBUG_RAW_PAYLOADS=true` para gravar amostras em `./storage/debug/printer_<id>.json`.
+- Esses arquivos não incluem token/senha (campos sensíveis são mascarados).
+- Use:
+  - `GET /api/v1/printers/{id}/debug/raw`
+  - `GET /api/v1/printers/{id}/debug/normalized`
+  para ajustar parser sem quebrar o contrato principal.
+
+### Advanced Refresh (somente leitura)
+
+Use para tentar preencher campos que chegam nulos em payload curto da A1.
+
+Configuração (`.env`):
+- `ADVANCED_REFRESH_ENABLED=true`
+- `ADVANCED_REFRESH_TIMEOUT_SECONDS=5`
+- `ADVANCED_REFRESH_ON_NULL_FIELDS=true`
+- `ONLINE_STALE_SECONDS=120`
+
+Comportamento:
+- Seguro/read-only: usa apenas
+  - MQTT `pushall` (request de status completo),
+  - cloud `get_print_status(force=True)`,
+  - cloud `get_ams_filaments`.
+- Não envia comandos de controle (sem print/movimento/temperatura/pause/stop).
+- Se não houver ganho, mantém os dados já disponíveis.
+- Regra de `online`:
+  - `online=true` quando houver atualização recente (janela `ONLINE_STALE_SECONDS`) e sinais de atividade (`state`, `print_status`, `progress_percent`, `job_name`, `current_layer`, `total_layers`, `nozzle_temp`, `bed_temp`, `network_signal`);
+  - evita degradar para `online=false` com payload MQTT curto.
+
+### Cache inteligente de AMS (context-aware)
+
+A API Bambu pode devolver AMS parcial/intermitente. O bridge aplica cache robusto para evitar regressão visual:
+
+- **Quality score** por payload AMS:
+  - `+1` por slot com índice
+  - `+1` por `material`
+  - `+1` por `color`
+  - `+1` por `name`
+  - `+1` por `type`
+  - `+2` se `active_slot` presente
+  - `+1` se `has_ams=true`
+- **Preservação inteligente**: se chegar payload fraco e o cache anterior for melhor, preserva o cache.
+- **Capability histórica por impressora**:
+  - `ams_capability_confirmed`
+  - `ams_last_confirmed_at`
+  - `ams_last_confirmed_source`
+  - `ams_last_good_payload`
+  Isso separa capacidade física histórica do payload instantâneo.
+- **Contexto de impressão**: usa `job_name`, `task_id`, `print_status`, `progress` para decidir se pode reaproveitar o AMS anterior.
+- **Invalidar em mudança de contexto**:
+  - `task_id` mudou
+  - `job_name` mudou
+  - queda brusca de progresso (ex.: 80 -> 5)
+- **TTL**: após `AMS_CACHE_PRESERVE_SECONDS`, status vira `stale`.
+- **Sem regressão brusca em impressora com AMS confirmado**:
+  - payload fraco não derruba imediatamente `has_ams` para `false` enquanto dentro de TTL e sem evidência de troca.
+
+Novos campos nos endpoints `/api/v1/printers/{id}` e `/api/v1/printers/{id}/ams`:
+- `cache_preserved`
+- `quality_score`
+- `ams_status` (`fresh | preserved | stale | pending_refresh`)
+- `last_good_update_at`
+- `context_job_name`
+- `context_task_id`
+- `data_source` (`mqtt`, `cloud`, `advanced_refresh`, etc.)
+- `ams_detected_struct`
+- `external_spool_configured`
+- `filament_source` (`ams | external | unknown`)
+- `filament` (`source`, `material`, `color`, `name`, `type`)
+- `ams_capability_confirmed`
+- `ams_capability_confidence`
+- `ams_last_confirmed_at`
+- `ams_last_confirmed_source`
+
+Campos por slot AMS (enriquecidos):
+- `slot`
+- `material`
+- `color` (compatível: valor bruto normalizado sem `#`)
+- `color_raw` (valor original do payload)
+- `color_hex` (normalizado para UI, ex. `#C52C18`)
+- `name`
+- `type`
+- `source_index` (índice/origem no payload bruto, ex. `id` da bandeja)
+
+Observação para **A1 sem AMS físico**:
+- é comum o payload não trazer dados suficientes de carretel externo;
+- nesse caso, o bridge responde `filament_source=unknown` e `filament` com valores `null`;
+- o bridge não força `has_ams=true` sem evidência real (slots com dados, `active_slot`, `ams_root` ou indicador explícito).
+
+Exemplos:
+
+```bash
+# Forçar refresh avançado explícito
+curl -s -X POST -H "Authorization: Bearer $API_TOKEN" \
+  http://127.0.0.1:8010/api/v1/printers/1/refresh-advanced | jq .
+
+# Status com refresh avançado antes da resposta
+curl -s -H "Authorization: Bearer $API_TOKEN" \
+  "http://127.0.0.1:8010/api/v1/printers/1/status?advanced_refresh=true" | jq .
+
+# Detalhe com refresh avançado
+curl -s -H "Authorization: Bearer $API_TOKEN" \
+  "http://127.0.0.1:8010/api/v1/printers/1?advanced_refresh=true" | jq .
+```
 
 ---
 

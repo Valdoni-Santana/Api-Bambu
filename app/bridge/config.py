@@ -49,6 +49,19 @@ class Settings(BaseSettings):
     history_snapshot_interval_seconds: int = Field(
         default=60, ge=10, alias="HISTORY_SNAPSHOT_INTERVAL_SECONDS"
     )
+    debug_raw_payloads: bool = Field(default=False, alias="DEBUG_RAW_PAYLOADS")
+    advanced_refresh_enabled: bool = Field(default=True, alias="ADVANCED_REFRESH_ENABLED")
+    advanced_refresh_timeout_seconds: float = Field(
+        default=5.0, ge=1.0, le=20.0, alias="ADVANCED_REFRESH_TIMEOUT_SECONDS"
+    )
+    advanced_refresh_on_null_fields: bool = Field(
+        default=True, alias="ADVANCED_REFRESH_ON_NULL_FIELDS"
+    )
+    online_stale_seconds: int = Field(default=120, ge=30, alias="ONLINE_STALE_SECONDS")
+    ams_cache_preserve_seconds: int = Field(
+        default=300, ge=30, alias="AMS_CACHE_PRESERVE_SECONDS"
+    )
+    ams_context_strict: bool = Field(default=True, alias="AMS_CONTEXT_STRICT")
 
     @field_validator("bambu_region")
     @classmethod
@@ -89,3 +102,6 @@ def ensure_storage_dirs(settings: Optional[Settings] = None) -> None:
     if not snap.is_absolute():
         snap = Path.cwd() / snap
     snap.mkdir(parents=True, exist_ok=True)
+    if s.debug_raw_payloads:
+        dbg = Path.cwd() / "storage" / "debug"
+        dbg.mkdir(parents=True, exist_ok=True)

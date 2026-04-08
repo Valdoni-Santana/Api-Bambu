@@ -16,7 +16,7 @@ from bridge.models.db import get_session_factory
 from bridge.models.entities import Printer, PrinterStatusCache
 from bridge.services.bambu_runtime import get_runtime
 from bridge.services.persistence import apply_status_to_db
-from bridge.services.status_normalizer import normalize_mqtt_or_cloud_payload
+from bridge.services.status_normalizer import normalize_mqtt_or_cloud_payload_with_debug
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,10 @@ def poll_cloud_status_once() -> None:
                 select(PrinterStatusCache).where(PrinterStatusCache.printer_id == p.id)
             ).scalar_one_or_none()
             if cache and cache.updated_at:
-                age = (datetime.now(timezone.utc) - cache.updated_at).total_seconds()
+                updated = cache.updated_at
+                if updated.tzinfo is None:
+                    updated = updated.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - updated).total_seconds()
                 stale = age > settings.mqtt_stale_seconds
 
             if mqtt_data and not stale:
@@ -71,7 +74,10 @@ def poll_cloud_status_once() -> None:
                 continue
 
             merged = _merge_cloud_device(cloud, mqtt_data)
-            norm = normalize_mqtt_or_cloud_payload(merged)
+            norm = normalize_mqtt_or_cloud_payload_with_debug(merged)
+            raw = norm.get("raw_payload_json")
+            if isinstance(raw, dict):
+                raw["_meta"] = {"source_label": "cloud poll"}
             apply_status_to_db(session, p.id, norm, append_history=False)
         session.commit()
     except Exception:

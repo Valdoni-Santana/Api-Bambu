@@ -9,7 +9,7 @@ dist/
 *.egg-info/
 venv/
 myvenv/
-/storage/
+/storage/bambu_bridge.db
 
 # Tokens and secrets
 proxy_tokens.json

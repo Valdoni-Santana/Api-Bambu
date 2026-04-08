@@ -1,0 +1,22 @@
+services:
+  bambu-bridge:
+    build: .
+    container_name: bambu-bridge
+    restart: unless-stopped
+    ports:
+      - "8010:8010"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////app/storage/bambu_bridge.db}
+      SNAPSHOT_DIR: ${SNAPSHOT_DIR:-/app/storage/snapshots}
+    volumes:
+      - ./storage:/app/storage
+      # Descomente para montar token salvo pelo CLI (Linux/macOS). No Windows use caminho completo.
+      # - C:/Users/SEU_USUARIO/.bambu_token:/root/.bambu_token:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8010/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
